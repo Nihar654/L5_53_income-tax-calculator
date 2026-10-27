@@ -2,10 +2,10 @@ import re
 import os
 import sys
 import json
-from xml.dom import minidom
-from wsgiref.handlers import CGIHandler
+from defusedxml import ElementTree as ET
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # Slabs as configured for this program (modelled on FY 2025-26)
 STANDARD_DEDUCTION_NEW = 75000
@@ -74,22 +74,23 @@ def isValidPan(pan):
         return False
 
 def encryptPan(pan):
-    encryptor = Cipher(algorithms.AES(PAN_KEY), modes.ECB()).encryptor()
-    padded = pan.encode().ljust(16, b" ")
-    cipherText = encryptor.update(padded) + encryptor.finalize()
-    return cipherText.hex()
+    nonce = os.urandom(12)
+    encryptor = AESGCM(PAN_KEY)
+    cipher_text = encryptor.encrypt(nonce, pan.encode(), None)
+    return (nonce + cipher_text).hex()
 
 def signingKey():
-    return rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 def parseForm16(xml_text, strict=True):
-    doc = minidom.parseString(xml_text)
-    salaryText = doc.getElementsByTagName("salary")[0].firstChild.data
-    tdsText = doc.getElementsByTagName("tds")[0].firstChild.data
-    return int(salaryText), int(tdsText)
+    doc = ET.fromstring(xml_text)
+    salary_text = doc.findtext("salary")
+    tds_text = doc.findtext("tds")
 
-def runAsCgi(app, debug=False):
-    CGIHandler().run(app)
+    if salary_text is None or tds_text is None:
+        raise ValueError("Form 16 must contain salary and tds elements")
+
+    return int(salary_text), int(tds_text)
 
 def main():
     print("New regime, salary 12,75,000:", newRegimeTax(1275000))
